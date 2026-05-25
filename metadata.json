@@ -1,0 +1,5 @@
+{
+  "name": "TSP Roster",
+  "description": "A responsive creator roster application cloning the visual style and functionality of the TSP Talent roster, featuring talent cards with social media statistics.",
+  "requestFramePermissions": []
+}

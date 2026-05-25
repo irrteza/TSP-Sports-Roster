@@ -1,0 +1,23 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/scrape-metrics",
+      "schedule": "0 3 * * *"
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "functions": {
+    "api/cron/scrape-metrics.ts": {
+      "maxDuration": 60
+    }
+  }
+}
