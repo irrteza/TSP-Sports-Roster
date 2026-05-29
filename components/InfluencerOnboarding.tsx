@@ -255,9 +255,9 @@ const InfluencerOnboarding: React.FC = () => {
     'w-full px-4 py-3 rounded-lg border border-slate-300 focus:border-[#5072a7] focus:ring-2 focus:ring-[#5072a7]/20 outline-none transition-all bg-white';
   const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5';
   const sectionTitleClass = 'flex items-center gap-3 mb-6';
-  const sectionNumberClass = 'text-sm font-bold text-[#b8860b] min-w-[28px]';
+  const sectionNumberClass = 'text-sm font-bold text-[#5072a7] min-w-[28px]';
   const sectionNameClass = 'text-xs font-bold text-slate-800 uppercase tracking-widest';
-  const sectionBarClass = 'w-1 h-6 bg-[#b8860b] rounded-full';
+  const sectionBarClass = 'w-1 h-6 bg-[#5072a7] rounded-full';
   const sectionClass = 'bg-white rounded-xl p-6 shadow-sm border border-slate-200';
   const requiredStar = <span className="text-red-500 ml-1">*</span>;
   const chipClass = (active: boolean) =>
@@ -293,23 +293,18 @@ const InfluencerOnboarding: React.FC = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       {/* Header */}
-      <header className="bg-slate-900 border-b border-slate-700">
-        <div className="max-w-4xl mx-auto px-6 py-4">
-          <div className="flex items-center gap-4">
-            <img src={logo} alt="TSP" className="h-8 object-contain" />
-            <div>
-              <h1 className="text-white font-bold text-lg tracking-wide">ATHLETE ONBOARDING</h1>
-              <p className="text-slate-400 text-xs tracking-wider uppercase">Talent Services & Partnerships</p>
-            </div>
+      <header className="bg-white border-b border-slate-200">
+        <div className="max-w-4xl mx-auto px-6 py-3">
+          <div className="flex justify-center">
+            <img src={logo} alt="TSP Talent" className="h-6 object-contain" />
           </div>
         </div>
       </header>
 
-      {/* Intro */}
-      <div className="max-w-4xl mx-auto px-6 pt-6 pb-2">
-        <p className="text-slate-600 text-sm">
-          Please complete all fields below. This information will be used to match you with brand deals and campaigns.
-        </p>
+      {/* Page Title */}
+      <div className="text-center py-8">
+        <h1 className="text-2xl md:text-3xl font-bold text-slate-900">Athlete Onboarding</h1>
+        <p className="text-slate-600 mt-2">Please complete all fields below. This information will be used to match you with brand deals and campaigns.</p>
       </div>
 
       {/* Form */}
@@ -834,11 +829,6 @@ const InfluencerOnboarding: React.FC = () => {
             </div>
           </div>
         </section>
-
-        {/* Footer */}
-        <div className="text-center text-xs text-slate-400 pt-2 pb-2">
-          TSP Talent Services & Partnerships · Athlete Roster Onboarding · Confidential
-        </div>
 
         {/* Actions */}
         <div className="flex items-center justify-center pt-2 pb-8">
