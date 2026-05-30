@@ -326,7 +326,7 @@ export async function updateAirtableRecord(
         'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ fields: airtableFields }),
+      body: JSON.stringify({ fields: airtableFields, typecast: true }),
     });
 
     if (!response.ok) {
@@ -371,7 +371,7 @@ export async function createAirtableRecord(
         'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ fields: airtableFields }),
+      body: JSON.stringify({ fields: airtableFields, typecast: true }),
     });
 
     if (!response.ok) {
@@ -437,7 +437,7 @@ export async function createAirtableRecordsBatch(
         'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ records }),
+      body: JSON.stringify({ records, typecast: true }),
     });
 
     if (!response.ok) {
@@ -791,7 +791,7 @@ export async function reassignCreatorPosition(
           'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ records }),
+        body: JSON.stringify({ records, typecast: true }),
       });
 
       if (!response.ok) {

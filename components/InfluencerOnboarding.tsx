@@ -200,9 +200,12 @@ const InfluencerOnboarding: React.FC = () => {
     setError(null);
 
     try {
-      // Build the submission with notes containing all sports-specific fields
+      // Build the submission with notes containing all sports-specific fields.
+      // The "City & State / Country" value feeds both Address (shown on the
+      // card) and Location (used by the Location filter), so both populate.
       const submissionState: CreatorEditFormState = {
         ...formState,
+        location: formState.address.trim(),
         tags: primarySport.trim() ? [primarySport.trim()] : [],
         notes: buildNotes(),
       };
