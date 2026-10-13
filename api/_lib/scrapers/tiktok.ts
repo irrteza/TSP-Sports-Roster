@@ -20,22 +20,18 @@ export function extractTikTokUsername(url: string): string | null {
   if (!url) return null;
 
   const cleaned = url.trim();
-
-  // Handle @username format
-  if (cleaned.startsWith('@')) {
-    return cleaned.substring(1).split('/')[0].split('?')[0];
+  let username = cleaned.replace(/^@/, '');
+  const address = /^(?:www\.)?tiktok\.com\//i.test(cleaned) ? `https://${cleaned}` : cleaned;
+  if (/^https?:\/\//i.test(address)) {
+    try {
+      const parsed = new URL(address);
+      if (parsed.hostname !== 'tiktok.com' && !parsed.hostname.endsWith('.tiktok.com')) return null;
+      const segment = decodeURIComponent(parsed.pathname.split('/')[1] || '');
+      if (!segment.startsWith('@')) return null;
+      username = segment.slice(1);
+    } catch { return null; }
   }
-
-  // Handle full URL
-  const urlMatch = cleaned.match(/tiktok\.com\/@([a-zA-Z0-9_.]+)/i);
-  if (urlMatch) {
-    return urlMatch[1];
-  }
-
-  // Handle just username (no @ or URL)
-  if (/^[a-zA-Z0-9_.]+$/.test(cleaned)) {
-    return cleaned;
-  }
+  if (/^[a-zA-Z0-9_.]{1,30}$/.test(username)) return username;
 
   return null;
 }
@@ -157,6 +153,9 @@ export async function scrapeTikTokMetrics(profileUrl: string): Promise<ScraperRe
         followers = firstPost.authorMeta.fans;
       }
     }
+
+    if (typeof followers !== 'number' || !Number.isFinite(followers) || followers < 0)
+      return { success: false, error: 'Follower count not available in TikTok profile data' };
 
     const metrics: SocialMetrics = {
       avgLikes: calculateAverage(likes),
