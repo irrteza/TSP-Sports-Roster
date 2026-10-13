@@ -1,7 +1,10 @@
 # Roster metrics scraping
 
 The daily Vercel cron at `03:00 UTC` refreshes platform metrics older than 30 days.
-Each invocation processes up to 10 tasks, oldest first, sequentially. It stops
+Each invocation batches up to 50 Instagram follower profiles in one actor run,
+then processes up to 10 other platform tasks, oldest first, sequentially.
+The dedicated `apify/instagram-followers-count-scraper` actor gets a 120-second
+budget. Follower results are matched by username, with writes batched ten records at a time. It stops
 starting tasks after 200 seconds, leaving up to 100 seconds for the final Apify
 request and Airtable writes. Backlog remaining is reported in the response.
 Individual failures retain existing metrics and enter the existing seven-day
@@ -42,6 +45,8 @@ written in one PATCH, and count as success only after Airtable accepts it.
 
 An HTTP 200 from an Apify actor can contain error records. The client rejects
 these rather than allowing engagement averages to be replaced by zeros.
+For follower batches, provider error items are isolated per username so one
+unavailable profile does not discard valid counts for the others.
 An empty dataset or missing/negative/non-finite Instagram follower count is also
 a failure. A genuine zero follower count is valid.
 
@@ -49,7 +54,8 @@ a failure. A genuine zero follower count is valid.
 
 The prior limit was one platform task per day: about 30 tasks/month. A creator
 can have four tasks (TikTok, YouTube, Instagram engagement and Instagram followers).
-The new ceiling is 10/day (about 300/month), but slow runs reduce actual throughput.
+The new follower ceiling is 50/day (about 1,500/month), plus up to ten other
+platform tasks/day. Slow runs reduce actual throughput.
 Use queue counts and scheduled-run results to check whether the roster fits.
 If backlog grows beyond capacity, move collection to a durable asynchronous queue
 or increase schedule frequency on a plan that supports it; increasing timeout alone

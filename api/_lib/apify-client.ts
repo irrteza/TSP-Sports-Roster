@@ -5,6 +5,7 @@ export interface ApifyRunOptions {
   actorId: string;
   input: Record<string, unknown>;
   timeoutSecs?: number;
+  allowItemErrors?: boolean;
 }
 
 export interface ApifyDatasetItem {
@@ -35,12 +36,12 @@ function actorPath(actorId: string): string {
   return `/acts/${encodeURIComponent(actorId.replace('/', '~'))}`;
 }
 
-function datasetItems(value: unknown): ApifyDatasetItem[] {
+function datasetItems(value: unknown, allowItemErrors = false): ApifyDatasetItem[] {
   if (!Array.isArray(value)) throw new Error('Apify returned an invalid dataset response (expected an array)');
   for (const item of value) {
     if (!item || typeof item !== 'object') throw new Error('Apify returned an invalid dataset item');
     // Actors can return HTTP 200 with error records instead of profile/post data.
-    if (item.error || item.errorDescription) {
+    if (!allowItemErrors && (item.error || item.errorDescription)) {
       throw new Error(`Apify scrape failed: ${String(item.errorDescription || item.error).slice(0, 1000)}`);
     }
   }
@@ -54,7 +55,7 @@ export async function runApifyActor(options: ApifyRunOptions): Promise<ApifyData
     { method: 'POST', body: JSON.stringify(input) },
     (timeoutSecs + 5) * 1000,
   );
-  return datasetItems(data);
+  return datasetItems(data, options.allowItemErrors);
 }
 
 export async function startApifyActor(options: ApifyRunOptions): Promise<string> {

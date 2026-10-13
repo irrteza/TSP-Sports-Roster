@@ -13,16 +13,17 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { timingSafeEqual } from 'node:crypto';
-import { fetchCreatorsWithSocialLinks, buildScrapeQueue, updateCreatorMetrics, updateFailureTracking, getAirtableConfig } from '../_lib/airtable-server.js';
+import { fetchCreatorsWithSocialLinks, buildScrapeQueue, updateCreatorMetrics, updateFailureTracking, getAirtableConfig, updateCreatorMetricsBatch } from '../_lib/airtable-server.js';
 import { getApifyKey } from '../_lib/apify-client.js';
 import { scrapeTikTokMetrics } from '../_lib/scrapers/tiktok.js';
 import { scrapeYouTubeMetrics } from '../_lib/scrapers/youtube.js';
 import { scrapeInstagramMetrics } from '../_lib/scrapers/instagram.js';
-import { scrapeInstagramFollowers } from '../_lib/scrapers/instagram-followers.js';
+import { scrapeInstagramFollowers, scrapeInstagramFollowersBatch } from '../_lib/scrapers/instagram-followers.js';
 import { MetricsUpdate, PlatformScrapeTask, SocialMetrics } from '../_lib/scrapers/types.js';
 
 // A daily single-task limit cannot refresh a roster with >30 platform tasks/month.
 const MAX_SCRAPES_PER_RUN = 10;
+const MAX_FOLLOWER_PROFILES_PER_RUN = 50;
 // Stop starting work early enough for a 65s Apify request and two 10s Airtable
 // requests to finish before the 300s function limit. Tasks run sequentially.
 const START_WORK_DEADLINE_MS = 200000;
@@ -180,6 +181,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         totalCreators: creators.length,
         tasksInQueue: queue.length,
         maxTasksPerRun: MAX_SCRAPES_PER_RUN,
+        maxFollowerProfilesPerRun: MAX_FOLLOWER_PROFILES_PER_RUN,
         tasksByPlatform: Object.fromEntries(
           ['tiktok', 'youtube', 'instagram', 'instagram-followers'].map(platform =>
             [platform, queue.filter(task => task.platform === platform).length]),
@@ -198,12 +200,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // 3. Take the first N tasks from the queue
-    const tasksToProcess = queue.slice(0, MAX_SCRAPES_PER_RUN);
-    console.log(`Processing ${tasksToProcess.length} tasks this run`);
-
-    // 4. Process each task sequentially (to avoid rate limits)
+    // Batch followers: one 120s actor and at most five 10s Airtable writes.
     const results: ScrapeResult[] = [];
+    const followerTasks = queue.filter(task => task.platform === 'instagram-followers').slice(0, MAX_FOLLOWER_PROFILES_PER_RUN);
+    if (followerTasks.length && Date.now() - startTime < START_WORK_DEADLINE_MS) {
+      const batchStart = Date.now();
+      const scraped = await scrapeInstagramFollowersBatch(followerTasks.map(task => task.url));
+      const now = new Date().toISOString();
+      const updates = followerTasks.map((task, i) => ({ recordId: task.recordId, metrics: scraped[i].success && scraped[i].metrics
+        ? { ...buildMetricsUpdate(task, scraped[i].metrics!), 'Instagram Followers Last Failure': null }
+        : { 'Instagram Followers Last Failure': now } }));
+      const saved = await updateCreatorMetricsBatch(updates);
+      followerTasks.forEach((task, i) => {
+        const write = saved.get(task.recordId);
+        const result = scraped[i];
+        results.push({ task, ...result, success: result.success && !!write?.success,
+          error: write?.success ? result.error : [result.error, write?.error || 'Airtable did not save the metrics'].filter(Boolean).join('; '),
+          durationMs: Date.now() - batchStart });
+      });
+    }
+    const tasksToProcess = queue.filter(task => task.platform !== 'instagram-followers').slice(0, MAX_SCRAPES_PER_RUN);
     for (const task of tasksToProcess) {
       if (Date.now() - startTime >= START_WORK_DEADLINE_MS) break;
       console.log(`Scraping ${task.platform} for ${task.creatorName}...`);

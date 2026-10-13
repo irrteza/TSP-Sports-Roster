@@ -20,27 +20,16 @@ export function extractInstagramUsername(url: string): string | null {
   if (!url) return null;
 
   const cleaned = url.trim();
-
-  // Handle @username format
-  if (cleaned.startsWith('@')) {
-    return cleaned.substring(1).split('/')[0].split('?')[0];
+  const reservedPaths = ['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'direct'];
+  let username = cleaned.replace(/^@/, '');
+  if (/^https?:\/\//i.test(cleaned)) {
+    try {
+      const parsed = new URL(cleaned);
+      if (parsed.hostname !== 'instagram.com' && !parsed.hostname.endsWith('.instagram.com')) return null;
+      username = decodeURIComponent(parsed.pathname.split('/')[1] || '');
+    } catch { return null; }
   }
-
-  // Handle full URL
-  const urlMatch = cleaned.match(/instagram\.com\/([a-zA-Z0-9_.]+)/i);
-  if (urlMatch) {
-    // Filter out known non-username paths
-    const potentialUsername = urlMatch[1];
-    const reservedPaths = ['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'direct'];
-    if (!reservedPaths.includes(potentialUsername.toLowerCase())) {
-      return potentialUsername;
-    }
-  }
-
-  // Handle just username (no @ or URL)
-  if (/^[a-zA-Z0-9_.]+$/.test(cleaned)) {
-    return cleaned;
-  }
+  if (/^[a-zA-Z0-9_.]{1,30}$/.test(username) && !reservedPaths.includes(username.toLowerCase())) return username;
 
   return null;
 }

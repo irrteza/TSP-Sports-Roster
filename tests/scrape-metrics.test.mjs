@@ -5,7 +5,8 @@ import { join } from 'node:path';
 
 const fromBuild = path => import(pathToFileURL(join(process.env.SCRAPER_TEST_BUILD_DIR, path)));
 const { runApifyActor, startApifyActor, getApifyRunStatus, getApifyDatasetItems } = await fromBuild('_lib/apify-client.js');
-const { scrapeInstagramFollowers } = await fromBuild('_lib/scrapers/instagram-followers.js');
+const { scrapeInstagramFollowers, scrapeInstagramFollowersBatch } = await fromBuild('_lib/scrapers/instagram-followers.js');
+const { extractInstagramUsername } = await fromBuild('_lib/scrapers/instagram.js');
 const { default: handler } = await fromBuild('cron/scrape-metrics.js');
 const initialEnv = { ...process.env };
 const initialFetch = globalThis.fetch;
@@ -36,9 +37,15 @@ function apiMock(records, { item = { followersCount: 123 }, patchStatus = 200, a
     calls.push({ url: address, ...init });
     if (address.includes('api.apify.com')) {
       elapsed += advance;
+      const input = JSON.parse(init.body);
+      if (input.usernames) return json(input.usernames.map(userName => ({ userName, ...item })));
+      if (input.resultsType === 'details') return json((input.directUrls || []).map(url => ({ username: new URL(url).pathname.split('/')[1], ...item })));
       return json([item]);
     }
-    if (init.method === 'PATCH') return json(patchStatus === 200 ? {} : { error: 'unknown field' }, patchStatus);
+    if (init.method === 'PATCH') {
+      const input = JSON.parse(init.body);
+      return json(patchStatus === 200 ? { records: input.records || [] } : { error: 'unknown field' }, patchStatus);
+    }
     return json({ records });
   };
 }
@@ -137,7 +144,7 @@ test('processes multiple platforms and saves freshness and cooldown in one write
   const res = await invoke();
   assert.equal(res.code, 200);
   assert.equal(res.body.successful, 4);
-  const writes = calls.filter(call => call.method === 'PATCH').map(call => JSON.parse(call.body).fields);
+  const writes = calls.filter(call => call.method === 'PATCH').flatMap(call => { const data = JSON.parse(call.body); return data.records ? data.records.map(r => r.fields) : [data.fields]; });
   assert.equal(writes.length, 4);
   const followers = writes.filter(fields => 'Instagram Followers (Scraped)' in fields);
   assert.equal(followers.length, 2);
@@ -154,7 +161,7 @@ test('Airtable rejection is a failure and never counted as a successful scrape',
   assert.equal(res.body.successful, 0);
   assert.equal(res.body.failed, 2);
   assert.match(res.body.results[0].error, /Airtable update error \(422\)/);
-  assert.match(res.body.results[0].error, /failure tracking also failed/);
+  assert.match(res.body.results.find(r => r.platform === 'instagram').error, /failure tracking also failed/);
 });
 
 test('actor error records preserve metrics, record cooldown, and continue the queue', async () => {
@@ -163,17 +170,19 @@ test('actor error records preserve metrics, record cooldown, and continue the qu
   assert.equal(res.code, 502);
   assert.equal(res.body.processed, 2);
   for (const call of calls.filter(c => c.method === 'PATCH')) {
-    const fields = JSON.parse(call.body).fields;
-    assert.equal(Object.keys(fields).length, 1);
-    assert.ok(Object.keys(fields)[0].endsWith('Last Failure'));
+    const data = JSON.parse(call.body);
+    for (const fields of data.records ? data.records.map(r => r.fields) : [data.fields]) {
+      assert.equal(Object.keys(fields).length, 1);
+      assert.ok(Object.keys(fields)[0].endsWith('Last Failure'));
+    }
   }
 });
 
 test('stops starting tasks before the runtime budget is exhausted', async () => {
   apiMock(Array.from({ length: 10 }, (_, i) => creator(`rec${i}`)), { advance: 65000 });
   const res = await invoke();
-  assert.equal(res.body.processed, 4);
-  assert.equal(res.body.remainingInQueue, 16);
+  assert.equal(res.body.processed, 13);
+  assert.equal(res.body.remainingInQueue, 7);
 });
 
 test('missing configuration is an HTTP failure before any requests', async () => {
@@ -184,4 +193,54 @@ test('missing configuration is an HTTP failure before any requests', async () =>
   assert.equal(res.code, 500);
   assert.match(res.body.details, /Apify configuration missing/);
   assert.equal(requests, 0);
+});
+
+
+test('batch followers match usernames despite shuffled, missing and error items', async () => {
+  globalThis.fetch = async () => json([
+    { userName: 'SECOND', followersCount: 0 },
+    { username: 'first', followersCount: 123 },
+    { username: 'blocked', error: 'Private account' },
+  ]);
+  const results = await scrapeInstagramFollowersBatch(['@first', '@second', '@missing', '@blocked', '@first']);
+  assert.deepEqual(results.map(r => r.success), [true, true, false, false, true]);
+  assert.equal(results[0].metrics.followers, 123);
+  assert.equal(results[1].metrics.followers, 0);
+});
+
+test('refreshes 50 followers in one actor request and five Airtable batch writes', async () => {
+  const records = Array.from({ length: 51 }, (_, i) => ({ id: `rec${i}`, fields: {
+    'Full Name': `creator${i}`, Instagram: `https://www.instagram.com/creator${i}/`,
+    'Instagram Last Updated': new Date().toISOString(),
+  } }));
+  apiMock(records);
+  const res = await invoke();
+  assert.equal(res.body.successful, 50);
+  assert.equal(res.body.remainingInQueue, 1);
+  assert.equal(calls.filter(c => c.url.includes('api.apify.com')).length, 1);
+  const writes = calls.filter(c => c.method === 'PATCH');
+  assert.equal(writes.length, 5);
+  assert.ok(writes.every(c => JSON.parse(c.body).records.length === 10));
+});
+
+test('unconfirmed Airtable batch IDs are failures', async () => {
+  apiMock([creator()]);
+  const mock = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const response = await mock(url, init);
+    return init?.method === 'PATCH' && JSON.parse(init.body).records ? json({ records: [] }) : response;
+  };
+  const res = await invoke();
+  assert.equal(res.code, 502);
+  assert.equal(res.body.results.find(r => r.platform === 'instagram-followers').success, false);
+});
+
+
+test('invalid Instagram URLs cannot silently scrape a different username', () => {
+  assert.equal(extractInstagramUsername('https://instagram.com/Iris Chairez '), null);
+  assert.equal(extractInstagramUsername('https://instagram.com/Iris%20Chairez'), null);
+  assert.equal(extractInstagramUsername('https://evilinstagram.com/iris'), null);
+  assert.equal(extractInstagramUsername('https://www.instagram.com/ugispro_/reels/'), 'ugispro_');
+  assert.equal(extractInstagramUsername('https://instagram.com/Example?igsh=abc'), 'Example');
+  assert.equal(extractInstagramUsername('@example'), 'example');
 });
