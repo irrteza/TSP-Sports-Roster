@@ -3,9 +3,22 @@
  * For use in Vercel serverless functions
  */
 
+import { createHash } from 'node:crypto';
 import { CreatorSocialLinks, MetricsUpdate, PlatformScrapeTask, isOlderThanDays, isInCooldown } from './scrapers/types.js';
 
 const AIRTABLE_API_BASE = 'https://api.airtable.com/v0';
+
+/** Spread monthly refreshes over UTC days 1-21, leaving a retry week.
+ * Never-scraped and badly overdue records are eligible immediately. */
+export function isMonthlyRefreshDue(timestamp: string | undefined, recordId: string, nowMs = Date.now()): boolean {
+  const now = new Date(nowMs);
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const updated = timestamp ? Date.parse(timestamp) : NaN;
+  if (updated >= monthStart) return false;
+  if (!Number.isFinite(updated) || nowMs - updated >= 45 * 86400000) return true;
+  const day = 1 + createHash('sha256').update(recordId).digest().readUInt32BE(0) % 21;
+  return now.getUTCDate() >= day;
+}
 
 export function getAirtableConfig() {
   const apiKey = process.env.AIRTABLE_API_KEY;
@@ -110,14 +123,17 @@ export async function fetchCreatorsWithSocialLinks(): Promise<CreatorSocialLinks
  */
 export function buildScrapeQueue(
   creators: CreatorSocialLinks[],
-  maxAgeDays: number = 10
+  maxAgeDays: number = 10,
+  monthly: boolean = false,
 ): PlatformScrapeTask[] {
   const tasks: PlatformScrapeTask[] = [];
+  const due = (timestamp: string | undefined, recordId: string) => monthly
+    ? isMonthlyRefreshDue(timestamp, recordId) : isOlderThanDays(timestamp, maxAgeDays);
 
   for (const creator of creators) {
     // Check TikTok (skip if in cooldown from recent failure)
     if (creator.tiktokUrl &&
-        isOlderThanDays(creator.tiktokLastUpdated, maxAgeDays) &&
+        due(creator.tiktokLastUpdated, creator.recordId) &&
         !isInCooldown(creator.tiktokLastFailure)) {
       tasks.push({
         recordId: creator.recordId,
@@ -130,7 +146,7 @@ export function buildScrapeQueue(
 
     // Check YouTube (skip if in cooldown from recent failure)
     if (creator.youtubeUrl &&
-        isOlderThanDays(creator.youtubeLastUpdated, maxAgeDays) &&
+        due(creator.youtubeLastUpdated, creator.recordId) &&
         !isInCooldown(creator.youtubeLastFailure)) {
       tasks.push({
         recordId: creator.recordId,
@@ -143,7 +159,7 @@ export function buildScrapeQueue(
 
     // Check Instagram engagement (skip if in cooldown from recent failure)
     if (creator.instagramUrl &&
-        isOlderThanDays(creator.instagramLastUpdated, maxAgeDays) &&
+        due(creator.instagramLastUpdated, creator.recordId) &&
         !isInCooldown(creator.instagramLastFailure)) {
       tasks.push({
         recordId: creator.recordId,
@@ -156,7 +172,7 @@ export function buildScrapeQueue(
 
     // Check Instagram Followers (skip if in cooldown from recent failure)
     if (creator.instagramUrl &&
-        isOlderThanDays(creator.instagramFollowersLastUpdated, maxAgeDays) &&
+        due(creator.instagramFollowersLastUpdated, creator.recordId) &&
         !isInCooldown(creator.instagramFollowersLastFailure)) {
       tasks.push({
         recordId: creator.recordId,
