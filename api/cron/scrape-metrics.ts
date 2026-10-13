@@ -170,14 +170,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const creators = await fetchCreatorsWithSocialLinks();
     console.log(`Found ${creators.length} creators with social links`);
 
-    // 2. Build priority queue of scrape tasks
-    const queue = buildScrapeQueue(creators, SCRAPE_AGE_DAYS);
+    // Each daily job owns a platform/shard so the Hobby schedule has enough
+    // independent capacity to refresh the whole roster each month.
+    const platform = req.query.platform;
+    const platforms = ['tiktok', 'youtube', 'instagram', 'instagram-followers'];
+    if (platform !== undefined && (typeof platform !== 'string' || !platforms.includes(platform)))
+      return res.status(400).json({ error: 'Invalid platform' });
+    const shard = Number(req.query.shard ?? 0);
+    const shards = Number(req.query.shards ?? 1);
+    if (!Number.isInteger(shard) || !Number.isInteger(shards) || shards < 1 || shards > 16 || shard < 0 || shard >= shards)
+      return res.status(400).json({ error: 'Invalid shard' });
+    const hashRecord = (id: string) => { let hash = 0; for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0; return hash; };
+    const queue = buildScrapeQueue(creators, SCRAPE_AGE_DAYS).filter(task =>
+      (!platform || task.platform === platform) && hashRecord(task.recordId) % shards === shard);
     console.log(`${queue.length} platform scrapes needed (older than ${SCRAPE_AGE_DAYS} days)`);
 
     // Read-only diagnostic: no Apify runs and no Airtable writes.
     if (req.query.dryRun === '1') {
       return res.status(200).json({
-        message: 'Scrape queue diagnostic',
+        message: 'Scrape queue diagnostic', platform: platform ?? 'all', shard, shards,
         totalCreators: creators.length,
         tasksInQueue: queue.length,
         maxTasksPerRun: MAX_SCRAPES_PER_RUN,

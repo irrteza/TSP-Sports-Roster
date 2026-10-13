@@ -1,8 +1,20 @@
 {
   "crons": [
     {
-      "path": "/api/cron/scrape-metrics",
+      "path": "/api/cron/scrape-metrics?platform=instagram-followers",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/scrape-metrics?platform=tiktok&shard=0&shards=1",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/scrape-metrics?platform=youtube&shard=0&shards=1",
+      "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/cron/scrape-metrics?platform=instagram&shard=0&shards=1",
+      "schedule": "0 2 * * *"
     }
   ],
   "rewrites": [

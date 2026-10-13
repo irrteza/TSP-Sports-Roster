@@ -1,6 +1,10 @@
 # Roster metrics scraping
 
-The daily Vercel cron at `03:00 UTC` refreshes platform metrics older than 30 days.
+Daily Vercel jobs refresh platform metrics older than 30 days. Instagram follower
+batches run at `03:00 UTC`; the other jobs each own a platform and a stable shard
+of record IDs. `vercel.json` lists the deployed schedules. The main roster has
+eight TikTok queues, five YouTube queues and six Instagram engagement queues;
+the smaller rosters have one queue for each platform. Each queue runs once daily.
 Each invocation batches up to 50 Instagram follower profiles in one actor run,
 then processes up to 10 other platform tasks, oldest first, sequentially.
 The dedicated `apify/instagram-followers-count-scraper` actor gets a 120-second
@@ -54,8 +58,12 @@ a failure. A genuine zero follower count is valid.
 
 The prior limit was one platform task per day: about 30 tasks/month. A creator
 can have four tasks (TikTok, YouTube, Instagram engagement and Instagram followers).
-The new follower ceiling is 50/day (about 1,500/month), plus up to ten other
-platform tasks/day. Slow runs reduce actual throughput.
+The Instagram follower ceiling is 50/day (about 1,500/month). Each other daily
+platform/shard job can process up to ten tasks within its 200-second work-start
+budget. Main-roster queues are split to handle its 632 TikTok, 382 YouTube and
+749 Instagram profiles. Failed or unavailable profiles enter cooldown and retain
+prior counts; successful refreshes become eligible again after 30 days.
+Slow providers and future roster growth can still reduce throughput.
 Use queue counts and scheduled-run results to check whether the roster fits.
 If backlog grows beyond capacity, move collection to a durable asynchronous queue
 or increase schedule frequency on a plan that supports it; increasing timeout alone

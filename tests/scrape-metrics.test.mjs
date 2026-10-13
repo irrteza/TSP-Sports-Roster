@@ -244,3 +244,23 @@ test('invalid Instagram URLs cannot silently scrape a different username', () =>
   assert.equal(extractInstagramUsername('https://instagram.com/Example?igsh=abc'), 'Example');
   assert.equal(extractInstagramUsername('@example'), 'example');
 });
+
+
+test('platform-specific jobs cannot consume another platform queue', async () => {
+  apiMock([creator()]);
+  const res = await invoke({query:{platform:'instagram-followers'}});
+  assert.equal(res.body.processed,1);
+  assert.ok(res.body.results.every(r=>r.platform==='instagram-followers'));
+});
+
+test('daily shards partition records without overlap or omission', async () => {
+  apiMock(Array.from({length:40},(_,i)=>creator(`rec${i}`)));
+  let total=0;
+  for(let shard=0;shard<8;shard++) {
+    const res=await invoke({query:{dryRun:'1',platform:'instagram-followers',shard:String(shard),shards:'8'}});
+    assert.equal(res.code,200);total+=res.body.tasksInQueue;
+  }
+  assert.equal(total,40);
+  assert.equal((await invoke({query:{platform:'bad'}})).code,400);
+  assert.equal((await invoke({query:{shard:'8',shards:'8'}})).code,400);
+});
