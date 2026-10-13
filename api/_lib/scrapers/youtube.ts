@@ -22,54 +22,22 @@ export function extractYouTubeChannel(url: string): { type: 'handle' | 'channelI
   if (!url) return null;
 
   const cleaned = url.trim();
-
-  // Handle @channelname format (without URL)
-  if (cleaned.startsWith('@')) {
-    return { type: 'handle', value: cleaned };
-  }
-
-  // Handle full URLs
+  const validName = (value: string) => /^[\p{L}\p{N}_.-]+$/u.test(value);
+  if (cleaned.startsWith('@')) return validName(cleaned.slice(1)) ? { type: 'handle', value: cleaned } : null;
+  if (!cleaned.includes('/') && !/youtube\.com/i.test(cleaned) && validName(cleaned))
+    return { type: 'handle', value: `@${cleaned}` };
   try {
-    // Try to parse as URL
-    const urlObj = new URL(cleaned.startsWith('http') ? cleaned : `https://${cleaned}`);
-    const pathname = urlObj.pathname;
-
-    // @handle format in URL
-    const handleMatch = pathname.match(/^\/@([a-zA-Z0-9_-]+)/);
-    if (handleMatch) {
-      return { type: 'handle', value: `@${handleMatch[1]}` };
-    }
-
-    // /channel/UC... format
-    const channelMatch = pathname.match(/^\/channel\/(UC[a-zA-Z0-9_-]+)/);
-    if (channelMatch) {
-      return { type: 'channelId', value: channelMatch[1] };
-    }
-
-    // /c/customname format
-    const customMatch = pathname.match(/^\/c\/([a-zA-Z0-9_-]+)/);
-    if (customMatch) {
-      return { type: 'custom', value: customMatch[1] };
-    }
-
-    // /user/username format
-    const userMatch = pathname.match(/^\/user\/([a-zA-Z0-9_-]+)/);
-    if (userMatch) {
-      return { type: 'user', value: userMatch[1] };
-    }
-
-    // Fallback: bare /username format (vanity URL without prefix)
-    // YouTube redirects these to the appropriate channel
-    const bareMatch = pathname.match(/^\/([a-zA-Z0-9_-]+)\/?$/);
-    if (bareMatch) {
-      return { type: 'handle', value: `@${bareMatch[1]}` };
-    }
-  } catch {
-    // Not a valid URL, try as plain handle
-    if (/^[a-zA-Z0-9_-]+$/.test(cleaned)) {
-      return { type: 'handle', value: `@${cleaned}` };
-    }
-  }
+    const parsed = new URL(/^https?:\/\//i.test(cleaned) ? cleaned : `https://${cleaned}`);
+    if (parsed.hostname !== 'youtube.com' && !parsed.hostname.endsWith('.youtube.com')) return null;
+    const parts = parsed.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+    const first = parts[0] || '';
+    if (first.startsWith('@')) return validName(first.slice(1)) ? { type: 'handle', value: first } : null;
+    const value = parts[1];
+    if (first === 'channel') return /^UC[a-zA-Z0-9_-]+$/.test(value || '') ? { type: 'channelId', value } : null;
+    if (first === 'c' || first === 'user') return value && validName(value) ? { type: first === 'c' ? 'custom' : 'user', value } : null;
+    const reserved = ['watch', 'playlist', 'shorts', 'feed', 'results', 'live', 'gaming'];
+    if (parts.length === 1 && validName(first) && !reserved.includes(first.toLowerCase())) return { type: 'handle', value: `@${first}` };
+  } catch { return null; }
 
   return null;
 }
@@ -169,6 +137,9 @@ export async function scrapeYouTubeMetrics(channelUrl: string): Promise<ScraperR
     const subscribers = firstVideo?.numberOfSubscribers;
     const totalVideos = firstVideo?.channelTotalVideos;
     const totalViews = firstVideo?.channelTotalViews;
+
+    if (typeof subscribers !== 'number' || !Number.isFinite(subscribers) || subscribers < 0)
+      return { success: false, error: 'Subscriber count not available in YouTube channel data' };
 
     const metrics: SocialMetrics = {
       avgLikes: calculateAverage(likes),

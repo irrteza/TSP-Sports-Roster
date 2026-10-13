@@ -6,6 +6,8 @@ import { join } from 'node:path';
 const fromBuild = path => import(pathToFileURL(join(process.env.SCRAPER_TEST_BUILD_DIR, path)));
 const { runApifyActor, startApifyActor, getApifyRunStatus, getApifyDatasetItems } = await fromBuild('_lib/apify-client.js');
 const { scrapeInstagramFollowers, scrapeInstagramFollowersBatch } = await fromBuild('_lib/scrapers/instagram-followers.js');
+const { extractTikTokUsername, scrapeTikTokMetrics } = await fromBuild('_lib/scrapers/tiktok.js');
+const { extractYouTubeChannel, scrapeYouTubeMetrics } = await fromBuild('_lib/scrapers/youtube.js');
 const { extractInstagramUsername } = await fromBuild('_lib/scrapers/instagram.js');
 const { default: handler } = await fromBuild('cron/scrape-metrics.js');
 const initialEnv = { ...process.env };
@@ -263,4 +265,32 @@ test('daily shards partition records without overlap or omission', async () => {
   assert.equal(total,40);
   assert.equal((await invoke({query:{platform:'bad'}})).code,400);
   assert.equal((await invoke({query:{shard:'8',shards:'8'}})).code,400);
+});
+
+
+test('TikTok rejects malformed handles instead of selecting another account', () => {
+  assert.equal(extractTikTokUsername('https://tiktok.com/@Iris chariez'), null);
+  assert.equal(extractTikTokUsername('https://eviltiktok.com/@iris'), null);
+  assert.equal(extractTikTokUsername('tiktok.com/@example/video/123'), 'example');
+  assert.equal(extractInstagramUsername('instagram.com/example/'), 'example');
+});
+
+test('YouTube preserves complete dotted and Unicode handles and rejects invalid hosts', () => {
+  assert.deepEqual(extractYouTubeChannel('https://youtube.com/@example.name/videos'), {type:'handle',value:'@example.name'});
+  assert.deepEqual(extractYouTubeChannel('@日本語'), {type:'handle',value:'@日本語'});
+  assert.equal(extractYouTubeChannel('https://youtube.com/@example wrong'),null);
+  assert.equal(extractYouTubeChannel('https://example.com/@wrong'),null);
+  assert.equal(extractYouTubeChannel('https://youtube.com/watch?v=video'),null);
+});
+
+
+test('TikTok and YouTube require real follower counts before advancing freshness', async () => {
+  globalThis.fetch = async () => json([{diggCount:1,authorMeta:{}}]);
+  assert.equal((await scrapeTikTokMetrics('@example')).success,false);
+  globalThis.fetch = async () => json([{viewCount:1}]);
+  assert.equal((await scrapeYouTubeMetrics('@example')).success,false);
+  globalThis.fetch = async () => json([{diggCount:0,authorMeta:{fans:0}}]);
+  assert.equal((await scrapeTikTokMetrics('@example')).metrics.followers,0);
+  globalThis.fetch = async () => json([{viewCount:0,numberOfSubscribers:0}]);
+  assert.equal((await scrapeYouTubeMetrics('@example')).metrics.subscribers,0);
 });

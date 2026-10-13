@@ -22,9 +22,10 @@ export function extractInstagramUsername(url: string): string | null {
   const cleaned = url.trim();
   const reservedPaths = ['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'direct'];
   let username = cleaned.replace(/^@/, '');
-  if (/^https?:\/\//i.test(cleaned)) {
+  const address = /^(?:www\.)?instagram\.com\//i.test(cleaned) ? `https://${cleaned}` : cleaned;
+  if (/^https?:\/\//i.test(address)) {
     try {
-      const parsed = new URL(cleaned);
+      const parsed = new URL(address);
       if (parsed.hostname !== 'instagram.com' && !parsed.hostname.endsWith('.instagram.com')) return null;
       username = decodeURIComponent(parsed.pathname.split('/')[1] || '');
     } catch { return null; }
