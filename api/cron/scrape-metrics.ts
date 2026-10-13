@@ -1,7 +1,7 @@
 /**
  * Social Media Metrics Scraper - Cron Job
  *
- * This endpoint runs on a schedule (every 30 days) to scrape social media metrics
+ * This endpoint runs daily to refresh social media metrics older than 30 days
  * for creators and update their records in Airtable.
  *
  * Features:
@@ -12,16 +12,21 @@
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { fetchCreatorsWithSocialLinks, buildScrapeQueue, updateCreatorMetrics, updateFailureTracking, clearFailureTracking } from '../_lib/airtable-server.js';
+import { timingSafeEqual } from 'node:crypto';
+import { fetchCreatorsWithSocialLinks, buildScrapeQueue, updateCreatorMetrics, updateFailureTracking, getAirtableConfig, updateCreatorMetricsBatch } from '../_lib/airtable-server.js';
+import { getApifyKey } from '../_lib/apify-client.js';
 import { scrapeTikTokMetrics } from '../_lib/scrapers/tiktok.js';
 import { scrapeYouTubeMetrics } from '../_lib/scrapers/youtube.js';
 import { scrapeInstagramMetrics } from '../_lib/scrapers/instagram.js';
-import { scrapeInstagramFollowers } from '../_lib/scrapers/instagram-followers.js';
+import { scrapeInstagramFollowers, scrapeInstagramFollowersBatch } from '../_lib/scrapers/instagram-followers.js';
 import { MetricsUpdate, PlatformScrapeTask, SocialMetrics } from '../_lib/scrapers/types.js';
 
-// Maximum number of platform scrapes per cron run
-// Keep low to stay within Vercel's 60-second timeout (~15-20s per scrape)
-const MAX_SCRAPES_PER_RUN = 1;
+// A daily single-task limit cannot refresh a roster with >30 platform tasks/month.
+const MAX_SCRAPES_PER_RUN = 10;
+const MAX_FOLLOWER_PROFILES_PER_RUN = 50;
+// Stop starting work early enough for a 65s Apify request and two 10s Airtable
+// requests to finish before the 300s function limit. Tasks run sequentially.
+const START_WORK_DEADLINE_MS = 200000;
 
 // Number of days before a platform needs re-scraping
 const SCRAPE_AGE_DAYS = 30;
@@ -36,26 +41,18 @@ interface ScrapeResult {
 
 /**
  * Verify the request is authorized
- * Vercel cron jobs send the x-vercel-cron header automatically
+ * Vercel sends Authorization: Bearer <CRON_SECRET> for scheduled invocations.
  */
 function verifyAuth(req: VercelRequest): boolean {
-  // Vercel cron jobs send this header automatically
-  if (req.headers['x-vercel-cron'] === '1') {
-    return true;
-  }
-
-  // Manual trigger with Authorization header (for testing)
   const authHeader = req.headers.authorization;
-  if (process.env.CRON_SECRET && authHeader === `Bearer ${process.env.CRON_SECRET}`) {
-    return true;
+  const secret = process.env.CRON_SECRET?.trim();
+  if (secret) {
+    const expected = Buffer.from(`Bearer ${secret}`);
+    const actual = Buffer.from(typeof authHeader === 'string' ? authHeader : '');
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
   }
-
-  // In local development, allow all requests
-  if (process.env.VERCEL_ENV !== 'production') {
-    return true;
-  }
-
-  return false;
+  // An unset VERCEL_ENV is also possible on deployed platforms; fail closed.
+  return process.env.NODE_ENV === 'development' && !process.env.VERCEL;
 }
 
 /**
@@ -165,18 +162,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
+    // Fail before any network requests when server credentials are missing.
+    getApifyKey();
+    getAirtableConfig();
     // 1. Fetch all creators with social links
     console.log('Fetching creators from Airtable...');
     const creators = await fetchCreatorsWithSocialLinks();
     console.log(`Found ${creators.length} creators with social links`);
 
-    // 2. Build priority queue of scrape tasks
-    const queue = buildScrapeQueue(creators, SCRAPE_AGE_DAYS);
+    // Each daily job owns a platform/shard so the Hobby schedule has enough
+    // independent capacity to refresh the whole roster each month.
+    const platform = req.query.platform;
+    const platforms = ['tiktok', 'youtube', 'instagram', 'instagram-followers'];
+    if (platform !== undefined && (typeof platform !== 'string' || !platforms.includes(platform)))
+      return res.status(400).json({ error: 'Invalid platform' });
+    const shard = Number(req.query.shard ?? 0);
+    const shards = Number(req.query.shards ?? 1);
+    if (!Number.isInteger(shard) || !Number.isInteger(shards) || shards < 1 || shards > 16 || shard < 0 || shard >= shards)
+      return res.status(400).json({ error: 'Invalid shard' });
+    const hashRecord = (id: string) => { let hash = 0; for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0; return hash; };
+    const queue = buildScrapeQueue(creators, SCRAPE_AGE_DAYS).filter(task =>
+      (!platform || task.platform === platform) && hashRecord(task.recordId) % shards === shard);
     console.log(`${queue.length} platform scrapes needed (older than ${SCRAPE_AGE_DAYS} days)`);
+
+    // Read-only diagnostic: no Apify runs and no Airtable writes.
+    if (req.query.dryRun === '1') {
+      return res.status(200).json({
+        message: 'Scrape queue diagnostic', platform: platform ?? 'all', shard, shards,
+        totalCreators: creators.length,
+        tasksInQueue: queue.length,
+        maxTasksPerRun: MAX_SCRAPES_PER_RUN,
+        maxFollowerProfilesPerRun: MAX_FOLLOWER_PROFILES_PER_RUN,
+        tasksByPlatform: Object.fromEntries(
+          ['tiktok', 'youtube', 'instagram', 'instagram-followers'].map(platform =>
+            [platform, queue.filter(task => task.platform === platform).length]),
+        ),
+        processed: 0,
+      });
+    }
 
     if (queue.length === 0) {
       return res.status(200).json({
-        message: 'All platforms are up to date',
+        message: 'No tasks eligible (fresh or in failure cooldown)',
         totalCreators: creators.length,
         tasksInQueue: 0,
         processed: 0,
@@ -184,37 +211,59 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // 3. Take the first N tasks from the queue
-    const tasksToProcess = queue.slice(0, MAX_SCRAPES_PER_RUN);
-    console.log(`Processing ${tasksToProcess.length} tasks this run`);
-
-    // 4. Process each task sequentially (to avoid rate limits)
+    // Batch followers: one 120s actor and at most five 10s Airtable writes.
     const results: ScrapeResult[] = [];
-    const updates: Array<{ recordId: string; metrics: MetricsUpdate }> = [];
-
+    const followerTasks = queue.filter(task => task.platform === 'instagram-followers').slice(0, MAX_FOLLOWER_PROFILES_PER_RUN);
+    if (followerTasks.length && Date.now() - startTime < START_WORK_DEADLINE_MS) {
+      const batchStart = Date.now();
+      const scraped = await scrapeInstagramFollowersBatch(followerTasks.map(task => task.url));
+      const now = new Date().toISOString();
+      const updates = followerTasks.map((task, i) => ({ recordId: task.recordId, metrics: scraped[i].success && scraped[i].metrics
+        ? { ...buildMetricsUpdate(task, scraped[i].metrics!), 'Instagram Followers Last Failure': null }
+        : { 'Instagram Followers Last Failure': now } }));
+      const saved = await updateCreatorMetricsBatch(updates);
+      followerTasks.forEach((task, i) => {
+        const write = saved.get(task.recordId);
+        const result = scraped[i];
+        results.push({ task, ...result, success: result.success && !!write?.success,
+          error: write?.success ? result.error : [result.error, write?.error || 'Airtable did not save the metrics'].filter(Boolean).join('; '),
+          durationMs: Date.now() - batchStart });
+      });
+    }
+    const tasksToProcess = queue.filter(task => task.platform !== 'instagram-followers').slice(0, MAX_SCRAPES_PER_RUN);
     for (const task of tasksToProcess) {
+      if (Date.now() - startTime >= START_WORK_DEADLINE_MS) break;
       console.log(`Scraping ${task.platform} for ${task.creatorName}...`);
       const result = await scrapeTask(task);
-      results.push(result);
 
       if (result.success && result.metrics) {
         const metricsUpdate = buildMetricsUpdate(task, result.metrics);
-        updates.push({ recordId: task.recordId, metrics: metricsUpdate });
-
-        // Update Airtable immediately for each successful scrape
-        // This ensures progress is saved even if the function times out
+        const failureFields = {
+          tiktok: 'TikTok Last Failure', youtube: 'YouTube Last Failure',
+          instagram: 'Instagram Last Failure', 'instagram-followers': 'Instagram Followers Last Failure',
+        };
+        // Save counts, freshness and cooldown clearing atomically. Never report
+        // success unless Airtable accepted the update.
         console.log(`Updating Airtable for ${task.creatorName} (${task.platform})...`);
-        await updateCreatorMetrics(task.recordId, metricsUpdate);
-
-        // Clear any previous failure tracking on success
-        await clearFailureTracking(task.recordId, task.platform);
-      } else {
+        const saved = await updateCreatorMetrics(task.recordId, {
+          ...metricsUpdate, [failureFields[task.platform]]: null,
+        });
+        if (!saved.success) {
+          result.success = false;
+          result.error = saved.error || 'Airtable did not save the metrics';
+        }
+      }
+      if (!result.success) {
         console.log(`Failed: ${result.error}`);
 
         // Record the failure so this task enters cooldown and won't be retried immediately
         console.log(`Recording failure for ${task.creatorName} (${task.platform})...`);
-        await updateFailureTracking(task.recordId, task.platform);
+        const tracked = await updateFailureTracking(task.recordId, task.platform);
+        if (!tracked.success) {
+          result.error = `${result.error}; failure tracking also failed: ${tracked.error}`;
+        }
       }
+      results.push(result);
     }
 
     // 5. Build summary
@@ -222,7 +271,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const failed = results.filter(r => !r.success).length;
 
     const summary = {
-      message: 'Scraping complete',
+      message: failed ? 'Scraping finished with failures' : 'Scraping complete',
       totalCreators: creators.length,
       tasksInQueue: queue.length,
       processed: results.length,
@@ -239,7 +288,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           avgLikes: r.metrics?.avgLikes,
           avgComments: r.metrics?.avgComments,
           avgViews: r.metrics?.avgViews,
-          followers: r.metrics?.followers || r.metrics?.subscribers,
+          followers: r.metrics?.followers ?? r.metrics?.subscribers,
         } : undefined,
       })),
       durationMs: Date.now() - startTime,
@@ -247,7 +296,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log('Scraping summary:', JSON.stringify(summary, null, 2));
 
-    return res.status(200).json(summary);
+    // A failed scrape/write must be visible to cron monitoring.
+    return res.status(failed ? 502 : 200).json(summary);
   } catch (error) {
     console.error('Cron job error:', error);
 

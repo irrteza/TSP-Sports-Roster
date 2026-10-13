@@ -68,6 +68,7 @@ export async function fetchCreatorsWithSocialLinks(): Promise<CreatorSocialLinks
     }
 
     const response = await fetch(url.toString(), {
+      signal: AbortSignal.timeout(10000),
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
@@ -196,6 +197,7 @@ export async function updateCreatorMetrics(
 
     const response = await fetch(url, {
       method: 'PATCH',
+      signal: AbortSignal.timeout(10000),
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
@@ -250,6 +252,7 @@ export async function batchUpdateCreatorMetrics(
 
       const response = await fetch(url, {
         method: 'PATCH',
+        signal: AbortSignal.timeout(10000),
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
@@ -309,4 +312,30 @@ export async function clearFailureTracking(
   const field = fieldMap[platform];
   // Set to empty string to clear the field in Airtable
   return updateCreatorMetrics(recordId, { [field]: '' } as MetricsUpdate);
+}
+
+/** Airtable accepts ten records per PATCH; require confirmation for each ID. */
+export async function updateCreatorMetricsBatch(
+  updates: { recordId: string; metrics: MetricsUpdate }[],
+): Promise<Map<string, { success: boolean; error?: string }>> {
+  const { apiKey, baseId, tableId } = getAirtableConfig();
+  const results = new Map<string, { success: boolean; error?: string }>();
+  for (let i = 0; i < updates.length; i += 10) {
+    const chunk = updates.slice(i, i + 10);
+    try {
+      const response = await fetch(`${AIRTABLE_API_BASE}/${baseId}/${tableId}`, {
+        method: 'PATCH', signal: AbortSignal.timeout(10000),
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: chunk.map(update => ({ id: update.recordId, fields: update.metrics })) }),
+      });
+      if (!response.ok) throw new Error(`Airtable update error (${response.status}): ${(await response.text()).slice(0, 1500)}`);
+      const data = await response.json() as AirtableResponse;
+      const saved = new Set(data.records?.map(record => record.id));
+      for (const update of chunk) results.set(update.recordId, saved.has(update.recordId)
+        ? { success: true } : { success: false, error: 'Airtable did not confirm the saved record' });
+    } catch (error) {
+      for (const update of chunk) results.set(update.recordId, { success: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return results;
 }

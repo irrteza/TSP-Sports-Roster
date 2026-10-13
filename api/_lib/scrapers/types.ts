@@ -73,10 +73,10 @@ export interface MetricsUpdate {
   'Instagram Last Updated'?: string;
   'Instagram Followers Last Updated'?: string;
   // Failure tracking fields
-  'TikTok Last Failure'?: string;
-  'YouTube Last Failure'?: string;
-  'Instagram Last Failure'?: string;
-  'Instagram Followers Last Failure'?: string;
+  'TikTok Last Failure'?: string | null;
+  'YouTube Last Failure'?: string | null;
+  'Instagram Last Failure'?: string | null;
+  'Instagram Followers Last Failure'?: string | null;
 }
 
 /**

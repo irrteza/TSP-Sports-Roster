@@ -1,132 +1,80 @@
-/**
- * Apify API Client
- * Wrapper for running Apify actors and retrieving results
- */
-
+/** Server-only Apify client. Never put credentials in URLs or logs. */
 const APIFY_API_BASE = 'https://api.apify.com/v2';
 
 export interface ApifyRunOptions {
   actorId: string;
   input: Record<string, unknown>;
   timeoutSecs?: number;
+  allowItemErrors?: boolean;
 }
 
 export interface ApifyDatasetItem {
   [key: string]: unknown;
 }
 
-/**
- * Run an Apify actor synchronously and return the dataset items
- * Uses the run-sync-get-dataset-items endpoint for efficiency
- */
+export function getApifyKey(): string {
+  const key = process.env.APIFY_KEY?.trim() || process.env.APIFY_API_KEY?.trim() || process.env.APIFY_TOKEN?.trim();
+  if (!key) throw new Error('Apify configuration missing. Set APIFY_KEY, APIFY_API_KEY or APIFY_TOKEN on the server.');
+  return key;
+}
+
+async function requestApify(path: string, init: RequestInit = {}, timeoutMs = 15000): Promise<unknown> {
+  const key = getApifyKey();
+  const response = await fetch(`${APIFY_API_BASE}${path}`, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`, ...init.headers },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) {
+    const body = (await response.text()).split(key).join('[redacted]').slice(0, 1500);
+    throw new Error(`Apify API error (${response.status}): ${body}`);
+  }
+  return response.json();
+}
+
+function actorPath(actorId: string): string {
+  return `/acts/${encodeURIComponent(actorId.replace('/', '~'))}`;
+}
+
+function datasetItems(value: unknown, allowItemErrors = false): ApifyDatasetItem[] {
+  if (!Array.isArray(value)) throw new Error('Apify returned an invalid dataset response (expected an array)');
+  for (const item of value) {
+    if (!item || typeof item !== 'object') throw new Error('Apify returned an invalid dataset item');
+    // Actors can return HTTP 200 with error records instead of profile/post data.
+    if (!allowItemErrors && (item.error || item.errorDescription)) {
+      throw new Error(`Apify scrape failed: ${String(item.errorDescription || item.error).slice(0, 1000)}`);
+    }
+  }
+  return value;
+}
+
 export async function runApifyActor(options: ApifyRunOptions): Promise<ApifyDatasetItem[]> {
   const { actorId, input, timeoutSecs = 120 } = options;
-  const apiKey = process.env.APIFY_KEY;
-
-  if (!apiKey) {
-    throw new Error('APIFY_KEY environment variable is not set');
-  }
-
-  // Actor IDs use ~ separator in API URLs (e.g., "apify~instagram-post-scraper")
-  const normalizedActorId = actorId.replace('/', '~');
-  const url = `${APIFY_API_BASE}/acts/${normalizedActorId}/run-sync-get-dataset-items?token=${apiKey}&timeout=${timeoutSecs}`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Apify API error (${response.status}): ${errorText}`);
-  }
-
-  const items = await response.json();
-  return Array.isArray(items) ? items : [];
+  const data = await requestApify(
+    `${actorPath(actorId)}/run-sync-get-dataset-items?timeout=${timeoutSecs}`,
+    { method: 'POST', body: JSON.stringify(input) },
+    (timeoutSecs + 5) * 1000,
+  );
+  return datasetItems(data, options.allowItemErrors);
 }
 
-/**
- * Run an Apify actor asynchronously (for longer-running tasks)
- * Returns the run ID which can be polled for completion
- */
 export async function startApifyActor(options: ApifyRunOptions): Promise<string> {
-  const { actorId, input } = options;
-  const apiKey = process.env.APIFY_KEY;
-
-  if (!apiKey) {
-    throw new Error('APIFY_KEY environment variable is not set');
-  }
-
-  const url = `${APIFY_API_BASE}/acts/${actorId}/runs?token=${apiKey}`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Apify API error (${response.status}): ${errorText}`);
-  }
-
-  const data = await response.json() as { data?: { id?: string } };
-  return data.data?.id ?? '';
+  const { actorId, input, timeoutSecs = 300 } = options;
+  const result = await requestApify(`${actorPath(actorId)}/runs?timeout=${timeoutSecs}`, {
+    method: 'POST', body: JSON.stringify(input),
+  }) as { data?: { id?: string } };
+  if (!result.data?.id) throw new Error('Apify did not return a run ID');
+  return result.data.id;
 }
 
-/**
- * Get the status of an Apify run
- */
-export async function getApifyRunStatus(runId: string): Promise<{
-  status: string;
-  datasetId?: string;
-}> {
-  const apiKey = process.env.APIFY_KEY;
-
-  if (!apiKey) {
-    throw new Error('APIFY_KEY environment variable is not set');
-  }
-
-  const url = `${APIFY_API_BASE}/actor-runs/${runId}?token=${apiKey}`;
-
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Apify API error (${response.status}): ${errorText}`);
-  }
-
-  const data = await response.json() as { data?: { status?: string; defaultDatasetId?: string } };
-  return {
-    status: data.data?.status ?? '',
-    datasetId: data.data?.defaultDatasetId,
+export async function getApifyRunStatus(runId: string): Promise<{ status: string; datasetId?: string }> {
+  const result = await requestApify(`/actor-runs/${encodeURIComponent(runId)}`) as {
+    data?: { status?: string; defaultDatasetId?: string };
   };
+  if (!result.data?.status) throw new Error('Apify did not return a run status');
+  return { status: result.data.status, datasetId: result.data.defaultDatasetId };
 }
 
-/**
- * Get items from an Apify dataset
- */
 export async function getApifyDatasetItems(datasetId: string): Promise<ApifyDatasetItem[]> {
-  const apiKey = process.env.APIFY_KEY;
-
-  if (!apiKey) {
-    throw new Error('APIFY_KEY environment variable is not set');
-  }
-
-  const url = `${APIFY_API_BASE}/datasets/${datasetId}/items?token=${apiKey}`;
-
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Apify API error (${response.status}): ${errorText}`);
-  }
-
-  const items = await response.json();
-  return Array.isArray(items) ? items : [];
+  return datasetItems(await requestApify(`/datasets/${encodeURIComponent(datasetId)}/items`));
 }
