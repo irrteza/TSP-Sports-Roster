@@ -76,3 +76,18 @@ References:
 - https://vercel.com/docs/cron-jobs/manage-cron-jobs
 - https://vercel.com/docs/functions/configuring-functions/duration
 - https://docs.apify.com/api/v2/actor-run-sync-get-dataset-items-post
+
+## Scheduler ownership
+
+Only one project should schedule writes for each Airtable table. The legacy
+`generic-roster` project shares Main’s table and its scheduler is disabled.
+Its old production deployment had no Apify key and repeatedly wrote failure
+cooldowns every two minutes, starving Main’s refresh queue. Keep that duplicate
+scheduler disabled while Main owns the monthly refreshes.
+
+`latam.tspcreators.co` serves the current `tsp-latam-roster` project. The separate
+legacy LATAM project still points to an inaccessible old Airtable base.
+
+Vercel Hobby blocks automatic Git deployments from Main’s private organization
+repository. Its production deployment is published with the authenticated Vercel
+CLI; the monthly cron itself runs independently of that Git deployment check.
