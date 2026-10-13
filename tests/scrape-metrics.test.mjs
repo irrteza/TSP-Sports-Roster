@@ -9,6 +9,7 @@ const { scrapeInstagramFollowers, scrapeInstagramFollowersBatch } = await fromBu
 const { extractTikTokUsername, scrapeTikTokMetrics } = await fromBuild('_lib/scrapers/tiktok.js');
 const { extractYouTubeChannel, scrapeYouTubeMetrics } = await fromBuild('_lib/scrapers/youtube.js');
 const { extractInstagramUsername } = await fromBuild('_lib/scrapers/instagram.js');
+const { isMonthlyRefreshDue } = await fromBuild('_lib/airtable-server.js');
 const { default: handler } = await fromBuild('cron/scrape-metrics.js');
 const initialEnv = { ...process.env };
 const initialFetch = globalThis.fetch;
@@ -293,4 +294,23 @@ test('TikTok and YouTube require real follower counts before advancing freshness
   assert.equal((await scrapeTikTokMetrics('@example')).metrics.followers,0);
   globalThis.fetch = async () => json([{viewCount:0,numberOfSubscribers:0}]);
   assert.equal((await scrapeYouTubeMetrics('@example')).metrics.subscribers,0);
+});
+
+
+test('monthly refreshes spread through days 1-21 and never repeat successful counts in a month', () => {
+  const previous='2026-10-13T12:00:00Z';
+  const start=Date.parse('2026-11-01T00:00:00Z');
+  const end=Date.parse('2026-11-21T23:00:00Z');
+  const firstDays=[];
+  for(let i=0;i<100;i++) {
+    const id=`rec${i}`;
+    assert.equal(isMonthlyRefreshDue(previous,id,end),true);
+    assert.equal(isMonthlyRefreshDue('2026-11-01T01:00:00Z',id,end),false);
+    let day=1;while(!isMonthlyRefreshDue(previous,id,start+(day-1)*86400000))day++;
+    firstDays.push(day);
+  }
+  assert.ok(new Set(firstDays).size>10);
+  assert.equal(isMonthlyRefreshDue(undefined,'new',start),true);
+  assert.equal(isMonthlyRefreshDue('2026-08-01T00:00:00Z','overdue',start),true);
+  assert.equal(isMonthlyRefreshDue('invalid','broken',start),true);
 });

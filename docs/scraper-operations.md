@@ -1,6 +1,9 @@
 # Roster metrics scraping
 
-Daily Vercel jobs refresh platform metrics older than 30 days. Instagram follower
+Daily Vercel jobs refresh each valid profile once per UTC calendar month.
+Stable record IDs distribute refresh dates across days 1-21, leaving the final
+week for retries. Never-scraped or 45-day-overdue records are eligible immediately.
+A successful save in the current month prevents another monthly refresh. Instagram follower
 batches run at `03:00 UTC`; the other jobs each own a platform and a stable shard
 of record IDs. `vercel.json` lists the deployed schedules. The main roster has
 eight TikTok queues, five YouTube queues and ten Instagram engagement queues;
@@ -62,7 +65,7 @@ The Instagram follower ceiling is 50/day (about 1,500/month). Each other daily
 platform/shard job can process up to ten tasks within its 200-second work-start
 budget. Main-roster queues are split to handle its 632 TikTok, 382 YouTube and
 749 Instagram profiles. Failed or unavailable profiles enter cooldown and retain
-prior counts; successful refreshes become eligible again after 30 days.
+prior counts; successful refreshes become eligible on their assigned day in the next month.
 Slow providers and future roster growth can still reduce throughput.
 Use queue counts and scheduled-run results to check whether the roster fits.
 If backlog grows beyond capacity, move collection to a durable asynchronous queue

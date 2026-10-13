@@ -181,9 +181,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!Number.isInteger(shard) || !Number.isInteger(shards) || shards < 1 || shards > 16 || shard < 0 || shard >= shards)
       return res.status(400).json({ error: 'Invalid shard' });
     const hashRecord = (id: string) => { let hash = 0; for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0; return hash; };
-    const queue = buildScrapeQueue(creators, SCRAPE_AGE_DAYS).filter(task =>
+    const queue = buildScrapeQueue(creators, SCRAPE_AGE_DAYS, true).filter(task =>
       (!platform || task.platform === platform) && hashRecord(task.recordId) % shards === shard);
-    console.log(`${queue.length} platform scrapes needed (older than ${SCRAPE_AGE_DAYS} days)`);
+    console.log(`${queue.length} platform scrapes due for monthly refresh`);
 
     // Read-only diagnostic: no Apify runs and no Airtable writes.
     if (req.query.dryRun === '1') {
