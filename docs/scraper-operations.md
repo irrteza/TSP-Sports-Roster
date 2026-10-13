@@ -3,7 +3,7 @@
 Daily Vercel jobs refresh platform metrics older than 30 days. Instagram follower
 batches run at `03:00 UTC`; the other jobs each own a platform and a stable shard
 of record IDs. `vercel.json` lists the deployed schedules. The main roster has
-eight TikTok queues, five YouTube queues and six Instagram engagement queues;
+eight TikTok queues, five YouTube queues and ten Instagram engagement queues;
 the smaller rosters have one queue for each platform. Each queue runs once daily.
 Each invocation batches up to 50 Instagram follower profiles in one actor run,
 then processes up to 10 other platform tasks, oldest first, sequentially.
