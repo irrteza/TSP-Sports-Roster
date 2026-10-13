@@ -68,6 +68,7 @@ export async function fetchCreatorsWithSocialLinks(): Promise<CreatorSocialLinks
     }
 
     const response = await fetch(url.toString(), {
+      signal: AbortSignal.timeout(10000),
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
@@ -196,6 +197,7 @@ export async function updateCreatorMetrics(
 
     const response = await fetch(url, {
       method: 'PATCH',
+      signal: AbortSignal.timeout(10000),
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
@@ -250,6 +252,7 @@ export async function batchUpdateCreatorMetrics(
 
       const response = await fetch(url, {
         method: 'PATCH',
+        signal: AbortSignal.timeout(10000),
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',

@@ -43,7 +43,7 @@ export async function scrapeInstagramFollowers(profileUrl: string): Promise<Scra
     const profileData = items[0] as InstagramProfileData;
 
     // Check if we got follower count
-    if (typeof profileData.followersCount !== 'number') {
+    if (typeof profileData.followersCount !== 'number' || !Number.isFinite(profileData.followersCount) || profileData.followersCount < 0) {
       return {
         success: false,
         error: 'Follower count not available in profile data',
